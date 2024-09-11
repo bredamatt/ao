@@ -1,7 +1,7 @@
 # Stage 1: Build the dynamic binary
 FROM rust:1.75.0 as builder
 
-# Set the working directory in the container
+# Set the working directory
 WORKDIR /usr/src/su
 
 # Install required dependencies for building
@@ -11,42 +11,30 @@ RUN apt-get update && apt-get install -y \
     clang \
     librocksdb-dev
 
-# Copy the manifests
+# Copy the manifests and cache dependencies
 COPY Cargo.toml Cargo.lock ./
+RUN mkdir src && echo "fn main() {}" > src/main.rs && cargo build --release && rm -f target/release/deps/su*
 
-# This step is to cache your dependencies
-RUN mkdir src && \
-    echo "fn main() {}" > src/main.rs && \
-    cargo build --release && \
-    rm -f target/release/deps/su*
-
-# Now copy the actual source code and build the application
+# Copy the actual source code and build the application
 COPY src ./src
 COPY migrations ./migrations
 RUN cargo build --release
 
-# The final output binary will be in /usr/src/su/target/release/su
+# Stage 2: Create the runnable image using dynamic linking
+FROM debian:bookworm-slim as runner
 
-
-# Stage 2: Create the runnable image using the binary
-FROM scratch as runner
-
-# Set the working directory in the container
+# Set the working directory
 WORKDIR /app
 
-# Copy the binary from your local file system to the container
+# Copy the binary from the builder stage
 COPY --from=builder /usr/src/su/target/release/su /app/su
 
-# Copy necessary libraries from the builder
-COPY --from=builder /lib/x86_64-linux-gnu/ /lib/x86_64-linux-gnu/
-COPY --from=builder /lib64/ /lib64/
+# Install the necessary runtime libraries
+RUN apt-get update && apt-get install -y libstdc++6 libssl3 libpq5 ca-certificates && rm -rf /var/lib/apt/lists/*
 
-# Provide instructions for building the binary
-# (This will be displayed when someone runs `docker build`)
-LABEL build_instructions="To build just the binary, run the following command: docker build --target builder -t su ."
+# Ensure the binary is executable
+RUN chmod +x /app/su
 
-# Run the binary - provide args on execution
-ENTRYPOINT [ "/app/su" ]
+# Run the binary
+CMD ["/app/su"]
 
-# Run time command arguments, default is empty
-CMD []
